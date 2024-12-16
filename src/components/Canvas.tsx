@@ -1,4 +1,4 @@
-import { createSignal, onMount } from "solid-js";
+import { createSignal, onMount, For } from "solid-js";
 
 type Block = {
   id: string;
@@ -23,7 +23,7 @@ type BlockCollision = {
 };
 
 export default function Canvas() {
-  let canvasRef: HTMLCanvasElement | undefined;
+  let containerRef;
 
   // Core state
   const [blocks, setBlocks] = createSignal<Block[]>([
@@ -58,7 +58,6 @@ export default function Canvas() {
     return result;
   };
 
-  // Find the bottom-most block in a chain
   const findLastConnectedBlock = (startBlockId: string): Block | undefined => {
     let currentBlock = getBlockById(startBlockId);
     while (currentBlock?.nextBlockId) {
@@ -77,7 +76,7 @@ export default function Canvas() {
     y <= block.y + block.height;
 
   const getSnapCollision = (active: Block, target: Block) => {
-    const tolerance = 20; // Increased tolerance for easier snapping
+    const tolerance = 20;
     const horizontalOverlap =
       Math.min(
         Math.abs(active.x - target.x),
@@ -86,18 +85,15 @@ export default function Canvas() {
 
     if (!horizontalOverlap) return null;
 
-    // Check for top snap
     if (Math.abs(active.y + active.height - target.y) <= tolerance) {
       return "top";
     }
-    // Check for bottom snap
     if (Math.abs(active.y - (target.y + target.height)) <= tolerance) {
       return "bottom";
     }
     return null;
   };
 
-  // Detect all block collisions
   const detectAllCollisions = () => {
     const collisions: BlockCollision[] = [];
     const blocksList = blocks();
@@ -137,14 +133,12 @@ export default function Canvas() {
       const blockIndex = updated.findIndex((b) => b.id === blockId);
       if (blockIndex === -1) return prev;
 
-      // Update the target block
       updated[blockIndex] = {
         ...updated[blockIndex],
         x: newX,
         y: newY,
       };
 
-      // Move all blocks above to align with the x position
       let currentAboveId = getBlockAbove(blockId)?.id;
       let currentY = newY;
 
@@ -162,7 +156,6 @@ export default function Canvas() {
         currentAboveId = getBlockAbove(currentAboveId)?.id;
       }
 
-      // Move all blocks below to align with the x position
       let currentBelowId = updated[blockIndex].nextBlockId;
       currentY = newY + updated[blockIndex].height;
 
@@ -208,16 +201,18 @@ export default function Canvas() {
 
   // Event handlers
   const handleMouseMove = (e: MouseEvent) => {
-    const rect = (e.currentTarget as HTMLCanvasElement).getBoundingClientRect();
+    const rect = (
+      containerRef as unknown as HTMLDivElement
+    )?.getBoundingClientRect();
+    if (!rect) return;
+
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     setMousePos({ x, y });
 
-    // Update hover state
     const hoveredBlock = blocks().find((block) => isPointInBlock(x, y, block));
     setHoveredBlockId(hoveredBlock?.id ?? null);
 
-    // Update drag state and check collisions
     if (dragState()) {
       const { blockId, offset } = dragState()!;
       moveBlock(blockId, x - offset.x, y - offset.y);
@@ -234,14 +229,11 @@ export default function Canvas() {
       return;
     }
 
-    // Detect all current collisions
     const collisions = detectAllCollisions();
     setActiveCollisions(collisions);
 
-    // Disconnect from block above if exists
     disconnectBlock(clickedBlock.id);
 
-    // Set up drag state with clicked block and its stack
     const stackIds = [
       clickedBlock.id,
       ...getConnectedBlocksBelow(clickedBlock.id),
@@ -267,13 +259,11 @@ export default function Canvas() {
         const blockIndex = updated.findIndex((b) => b.id === currentId);
         if (blockIndex === -1) break;
 
-        // Update Y position for current block
         updated[blockIndex] = {
           ...updated[blockIndex],
           y: currentY,
         };
 
-        // Move to next block
         currentY += updated[blockIndex].height;
         currentId = updated[blockIndex].nextBlockId as string;
       }
@@ -297,35 +287,28 @@ export default function Canvas() {
 
     let didSnap = false;
 
-    // Get first (top) and last (bottom) blocks of our stack
     const firstStackBlock = stackBlocks[0];
     const lastStackBlock = stackBlocks[stackBlocks.length - 1];
 
-    // First check for insertion between connected blocks
     const blocksList = blocks();
     for (const topBlock of blocksList) {
-      // Skip if this block is in our stack
       if (dragState()!.stackIds.includes(topBlock.id)) continue;
 
-      // Only consider blocks that are connected to something
       if (!topBlock.nextBlockId) continue;
 
       const bottomBlock = getBlockById(topBlock.nextBlockId);
       if (!bottomBlock || dragState()!.stackIds.includes(bottomBlock.id))
         continue;
 
-      // Check if our block is positioned between these blocks
       const tolerance = 20;
       const blockY = firstStackBlock.y;
       const topBlockBottom = topBlock.y + topBlock.height;
       const bottomBlockTop = bottomBlock.y;
 
-      // Check if block is positioned between the connected blocks
       if (
         blockY > topBlockBottom - tolerance &&
         blockY < bottomBlockTop + tolerance
       ) {
-        // Check horizontal alignment
         const horizontalOverlap =
           firstStackBlock.x + firstStackBlock.width >= topBlock.x &&
           firstStackBlock.x <= topBlock.x + topBlock.width;
@@ -333,41 +316,31 @@ export default function Canvas() {
         if (horizontalOverlap) {
           didSnap = true;
 
-          // Position the first block of our stack right after the top block
           const newY = topBlock.y + topBlock.height;
 
-          // Update connections first
           setBlocks((prev) =>
             prev.map((block) => {
               if (block.id === topBlock.id) {
-                // Top block now points to our first block
                 return { ...block, nextBlockId: firstStackBlock.id };
               }
               if (block.id === lastStackBlock.id) {
-                // Our last block points to the bottom block
                 return { ...block, nextBlockId: bottomBlock.id };
               }
               return block;
             })
           );
 
-          // Move our stack into position
           moveBlock(firstStackBlock.id, topBlock.x, newY);
-
-          // Update Y positions for all blocks from our first block downward
           updateStackPositions(firstStackBlock.id, newY);
           break;
         }
       }
     }
 
-    // If no insertion occurred, try normal snapping
     if (!didSnap) {
-      // Check for collisions with non-stack blocks
       for (const targetBlock of blocks()) {
         if (dragState()!.stackIds.includes(targetBlock.id)) continue;
 
-        // Check if we're snapping from above
         const topSnap = getSnapCollision(lastStackBlock, targetBlock);
         if (topSnap === "top") {
           didSnap = true;
@@ -378,7 +351,6 @@ export default function Canvas() {
           break;
         }
 
-        // Find last block in target's chain for bottom snapping
         const lastTargetBlock = findLastConnectedBlock(targetBlock.id);
         if (lastTargetBlock) {
           const bottomSnap = getSnapCollision(firstStackBlock, lastTargetBlock);
@@ -398,49 +370,14 @@ export default function Canvas() {
     setActiveCollisions([]);
   };
 
-  // Canvas rendering
-  const draw = () => {
-    const ctx = canvasRef?.getContext("2d");
-    if (!ctx) return;
-
-    ctx.clearRect(0, 0, canvasRef!.width, canvasRef!.height);
-
-    // Draw blocks
-    for (const block of blocks().sort((a, b) => {
-      if (dragState() && dragState()!.stackIds.includes(a.id)) return 1;
-      if (dragState() && dragState()!.stackIds.includes(b.id)) return -1;
-      return 0;
-    })) {
-      ctx.fillStyle = block.color;
-      ctx.fillRect(block.x, block.y, block.width, block.height);
-
-      // Draw collision indicators
-      const collisions = activeCollisions().filter(
-        (c) => c.blockId === block.id || c.collidingWithId === block.id
-      );
-
-      if (collisions.length > 0) {
-        ctx.strokeStyle = "yellow";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(block.x, block.y, block.width, block.height);
-      }
-    }
-
-    // Request next frame
-    requestAnimationFrame(draw);
-  };
-
-  onMount(() => {
-    if (canvasRef) draw();
-  });
-
   return (
     <div>
-      <canvas
-        ref={canvasRef}
-        width={800}
-        height={600}
+      <div
+        ref={containerRef}
         style={{
+          position: "relative",
+          width: "800px",
+          height: "600px",
           border: "1px solid black",
           cursor: dragState()
             ? "move"
@@ -451,7 +388,40 @@ export default function Canvas() {
         onMouseMove={handleMouseMove}
         onMouseDown={handleMouseDown}
         onMouseUp={handleMouseUp}
-      />
+      >
+        <For
+          each={blocks().sort((a, b) => {
+            if (dragState() && dragState()!.stackIds.includes(a.id)) return 1;
+            if (dragState() && dragState()!.stackIds.includes(b.id)) return -1;
+            return 0;
+          })}
+        >
+          {(block) => (
+            <div
+              style={{
+                position: "absolute",
+                left: `${block.x}px`,
+                top: `${block.y}px`,
+                width: `${block.width}px`,
+                height: `${block.height}px`,
+                background: block.color,
+                border: activeCollisions().some(
+                  (c) =>
+                    c.blockId === block.id || c.collidingWithId === block.id
+                )
+                  ? "2px solid yellow"
+                  : "none",
+                "user-select": "none",
+                transition: dragState()?.stackIds.includes(block.id)
+                  ? "none"
+                  : "all 0.1s ease",
+              }}
+            >
+              {block.id}
+            </div>
+          )}
+        </For>
+      </div>
       <pre>
         {JSON.stringify(
           {
