@@ -30,6 +30,8 @@ export default function Canvas() {
     { id: "1", x: 0, y: 0, width: 200, height: 50, color: "red" },
     { id: "2", x: 200, y: 70, width: 200, height: 50, color: "blue" },
     { id: "3", x: 300, y: 170, width: 200, height: 50, color: "green" },
+    { id: "4", x: 400, y: 270, width: 200, height: 50, color: "purple" },
+    { id: "5", x: 500, y: 370, width: 200, height: 50, color: "orange" },
   ]);
 
   const [dragState, setDragState] = createSignal<DragState | null>(null);
@@ -222,7 +224,7 @@ export default function Canvas() {
     }
   };
 
-  const handleMouseDown = (e: MouseEvent) => {
+  const handleMouseDown = () => {
     const clickedBlock = blocks().find((block) =>
       isPointInBlock(mousePos().x, mousePos().y, block)
     );
@@ -254,6 +256,32 @@ export default function Canvas() {
     });
   };
 
+  const updateStackPositions = (startBlockId: string, startY: number) => {
+    let currentY = startY;
+    let currentId = startBlockId;
+
+    setBlocks((prev) => {
+      const updated = [...prev];
+
+      while (currentId) {
+        const blockIndex = updated.findIndex((b) => b.id === currentId);
+        if (blockIndex === -1) break;
+
+        // Update Y position for current block
+        updated[blockIndex] = {
+          ...updated[blockIndex],
+          y: currentY,
+        };
+
+        // Move to next block
+        currentY += updated[blockIndex].height;
+        currentId = updated[blockIndex].nextBlockId as string;
+      }
+
+      return updated;
+    });
+  };
+
   const handleMouseUp = () => {
     if (!dragState()) return;
 
@@ -273,39 +301,95 @@ export default function Canvas() {
     const firstStackBlock = stackBlocks[0];
     const lastStackBlock = stackBlocks[stackBlocks.length - 1];
 
-    // Check for collisions with non-stack blocks
-    for (const targetBlock of blocks()) {
-      if (dragState()!.stackIds.includes(targetBlock.id)) continue;
+    // First check for insertion between connected blocks
+    const blocksList = blocks();
+    for (const topBlock of blocksList) {
+      // Skip if this block is in our stack
+      if (dragState()!.stackIds.includes(topBlock.id)) continue;
 
-      // Check if we're snapping from above (our last block to target's top)
-      const topSnap = getSnapCollision(lastStackBlock, targetBlock);
-      if (topSnap === "top") {
-        didSnap = true;
-        // Align with target
-        moveBlock(
-          lastStackBlock.id,
-          targetBlock.x,
-          targetBlock.y - lastStackBlock.height
-        );
-        // Connect our last block to target
-        connectBlocks(lastStackBlock.id, targetBlock.id);
-        break;
-      }
+      // Only consider blocks that are connected to something
+      if (!topBlock.nextBlockId) continue;
 
-      // Find last block in target's chain for bottom snapping
-      const lastTargetBlock = findLastConnectedBlock(targetBlock.id);
-      if (lastTargetBlock) {
-        // Check if we're snapping to bottom (our first block to target's bottom)
-        const bottomSnap = getSnapCollision(firstStackBlock, lastTargetBlock);
-        if (bottomSnap === "bottom") {
+      const bottomBlock = getBlockById(topBlock.nextBlockId);
+      if (!bottomBlock || dragState()!.stackIds.includes(bottomBlock.id))
+        continue;
+
+      // Check if our block is positioned between these blocks
+      const tolerance = 20;
+      const blockY = firstStackBlock.y;
+      const topBlockBottom = topBlock.y + topBlock.height;
+      const bottomBlockTop = bottomBlock.y;
+
+      // Check if block is positioned between the connected blocks
+      if (
+        blockY > topBlockBottom - tolerance &&
+        blockY < bottomBlockTop + tolerance
+      ) {
+        // Check horizontal alignment
+        const horizontalOverlap =
+          firstStackBlock.x + firstStackBlock.width >= topBlock.x &&
+          firstStackBlock.x <= topBlock.x + topBlock.width;
+
+        if (horizontalOverlap) {
           didSnap = true;
-          // Calculate position relative to last target block
-          const newY = lastTargetBlock.y + lastTargetBlock.height;
-          // Move our first block to snap position
-          moveBlock(firstStackBlock.id, lastTargetBlock.x, newY);
-          // Connect last target block to our first block
-          connectBlocks(lastTargetBlock.id, firstStackBlock.id);
+
+          // Position the first block of our stack right after the top block
+          const newY = topBlock.y + topBlock.height;
+
+          // Update connections first
+          setBlocks((prev) =>
+            prev.map((block) => {
+              if (block.id === topBlock.id) {
+                // Top block now points to our first block
+                return { ...block, nextBlockId: firstStackBlock.id };
+              }
+              if (block.id === lastStackBlock.id) {
+                // Our last block points to the bottom block
+                return { ...block, nextBlockId: bottomBlock.id };
+              }
+              return block;
+            })
+          );
+
+          // Move our stack into position
+          moveBlock(firstStackBlock.id, topBlock.x, newY);
+
+          // Update Y positions for all blocks from our first block downward
+          updateStackPositions(firstStackBlock.id, newY);
           break;
+        }
+      }
+    }
+
+    // If no insertion occurred, try normal snapping
+    if (!didSnap) {
+      // Check for collisions with non-stack blocks
+      for (const targetBlock of blocks()) {
+        if (dragState()!.stackIds.includes(targetBlock.id)) continue;
+
+        // Check if we're snapping from above
+        const topSnap = getSnapCollision(lastStackBlock, targetBlock);
+        if (topSnap === "top") {
+          didSnap = true;
+          const newY = targetBlock.y - lastStackBlock.height;
+          moveBlock(lastStackBlock.id, targetBlock.x, newY);
+          connectBlocks(lastStackBlock.id, targetBlock.id);
+          updateStackPositions(targetBlock.id, targetBlock.y);
+          break;
+        }
+
+        // Find last block in target's chain for bottom snapping
+        const lastTargetBlock = findLastConnectedBlock(targetBlock.id);
+        if (lastTargetBlock) {
+          const bottomSnap = getSnapCollision(firstStackBlock, lastTargetBlock);
+          if (bottomSnap === "bottom") {
+            didSnap = true;
+            const newY = lastTargetBlock.y + lastTargetBlock.height;
+            moveBlock(firstStackBlock.id, lastTargetBlock.x, newY);
+            connectBlocks(lastTargetBlock.id, firstStackBlock.id);
+            updateStackPositions(firstStackBlock.id, newY);
+            break;
+          }
         }
       }
     }
